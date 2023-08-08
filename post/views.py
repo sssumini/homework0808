@@ -3,40 +3,62 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.exceptions import PermissionDenied
-from .models import Post, Comment
+from .models import Post, Comment, PostReaction
 from .serializers import PostSerializer, CommentSerializer, PostListSerializer
 from rest_framework.decorators import action
 from django.shortcuts import get_object_or_404
 from .permissions import IsOwnerOrReadOnly
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.filters import SearchFilter, OrderingFilter
+from .paginations import *
+from django.db.models import Count, Q
 # Create your views here.
 
 class PostViewSet(viewsets.ModelViewSet):
     queryset = Post.objects.all()
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ["title", "content"]
+    search_fields = ["title", "content"]
+    orderign_fields = ["title", "created_at"]
     permission_classes = [IsAuthenticated]
     serializer_class = PostSerializer
-    
-    @action(methods=["GET"], detail=False)
-    def recommend(self, request):
-        ran_post = self.get_queryset().order_by("-likes")[:3]
-        ran_post_serializer = PostListSerializer(ran_post, many=True)
-        return Response(ran_post_serializer.data)
+    pagination_class = PostPagination
+    queryset = Post.objects.annotate(
+        like_cnt=Count(
+           "reactions", filter=Q(reactions__reaction="like"), distinct=True
+        ),
+       # comments_cnt=Count("comments"),
+    )
+
+    #@action(methods=["GET"], detail=False)
+    #def recommend(self, request):
+    #    ran_post = self.get_queryset().order_by("-likes")[:3]
+    #    ran_post_serializer = PostListSerializer(ran_post, many=True)
+    #    return Response(ran_post_serializer.data)
 
     
-    @action(methods=["GET"], detail=True)
-    def test(self, request, pk=None):
-        test_post = self.get_object()
-        test_post.likes += 1
-        test_post.save(update_fields=["likes"])
+    @action(methods=["POST"], detail=True)
+    def likes(self, request, pk=None):
+        post = self.get_object()
+        PostReaction.objects.create(post=post, user=request.user, reaction="like")
         return Response()
 
+    @action(methods=["GET"], detail=False)
+    def top5(self, request):
+        queryset = self.get_queryset().order_by("-like_cnt")[:5]
+        serializer = PostListSerializer(queryset, many=True)
+        return Response(serializer.data)
+
     def get_permissions(self):
-        if self.action in ["create", "update", "destroy", "partial_update"]:
-            return [IsOwnerOrReadOnly()]
+        if self.action in ["update", "destroy", "partial_update"]:
+            return [IsAdminUser()]
+        elif self.action in ["likes"]:
+            return [IsAuthenticated()]
         return []
     
-    def get_object(self):
-        obj = super().get_object()
-        return obj
+    #def get_object(self):
+    #    obj = super().get_object()
+    #    return obj
 
     def get_serializer_class(self):
         if self.action == "list":
